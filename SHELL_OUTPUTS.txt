@@ -1,0 +1,407 @@
+osh> cat shell.c &
+osh> // Nicholas Ayson
+// Due on March 25, 2021
+// Unix Shell project
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+
+#define READ_END 0 
+#define WRITE_END 1
+
+int piperhs(char** cargs);
+
+//start of parse function
+char** tokparse(char* s, char* cargs[])
+{
+    const char breakchars[2] = {' ','\t'};
+    char* p;
+    int num_args = 0;
+
+    p = strtok(s, breakchars);
+    cargs[0] = p;
+
+    char** REDIR = malloc(2 * sizeof(char*));
+
+    for(int i = 0; i < 2; i++)
+    {
+        REDIR[i] = malloc(BUFSIZ * sizeof(char));
+    }
+
+    REDIR[0] = "";
+    REDIR[1] = "";
+
+    while(p != NULL)
+    {
+        // add p to cargs
+        p = strtok(NULL, breakchars);
+
+        if(p == NULL) 
+        {
+            break;
+        }
+        if(!strncmp(p, ">", 1))
+        {
+            p = strtok(NULL, breakchars);
+            REDIR[0] = "o";
+            REDIR[1] = p;
+            return REDIR;
+        } 
+        else if(!strncmp(p, "<", 1))
+        {
+            p = strtok(NULL, breakchars);
+            REDIR[0] = "i";
+            REDIR[1] = p;
+            return REDIR;
+        }
+        else if(!strncmp(p, "|", 1))
+        {   // pipe
+            REDIR[0] = "p";        
+        }
+        cargs[++num_args] = p;
+    }
+    return REDIR;
+}
+
+int main(int argc, const char* argv[])
+{
+    char s [BUFSIZ];
+    char MRU   [BUFSIZ]; // most-recently used cache
+    int pipefd[2];      // file descriptor
+
+    // clear buffers
+    memset(s, 0, BUFSIZ * sizeof(char));
+    memset(MRU,   0, BUFSIZ * sizeof(char));
+   
+
+    while(1)
+    {
+        printf("osh> ");
+        fflush(stdout); 
+
+        // read into s
+        fgets(s, BUFSIZ, stdin);
+        s[strlen(s) - 1] = '\0';                // replace newline with null
+
+        // edge cases
+        if(strncmp(s, "exit", 4) == 0)          //get out of osh
+        {
+            return 0;
+        }
+        if(strncmp(s, "!!", 2))                 // history
+        {
+            strcpy(MRU, s);
+        } 
+
+        // wait for '&'
+        bool waitx = true;
+        char* offset = strstr(s, "&");
+        if(offset != NULL)
+        {
+            *offset = ' '; 
+            waitx = false;
+        }
+
+        pid_t pid = fork();
+        if(pid < 0)
+        {   // failed to create child 
+            fprintf(stderr, "fork failed...\n");
+            return -1; // exit
+        }
+        else if(pid != 0)
+        {   // parent
+            if(waitx){
+                wait(NULL);         // wait if used with '&'
+                wait(NULL);
+            }
+        }
+        else
+        {   // child
+            char* cargs[BUFSIZ];
+            memset(cargs, 0, BUFSIZ * sizeof(char));
+
+            int history = 0;
+            // if we use '!!' we want to read from MRU
+            if(!strncmp(s, "!!", 2))
+            {
+                history = 1;
+            }
+            char** redirect = tokparse( (history ? MRU : s), cargs);
+            // no command entered before history function
+            if(history && MRU[0] == '\0')
+            {
+                printf("No recently used command.\n");
+                exit(0);
+            } 
+            if(!strncmp(redirect[0], "o", 1))
+            {   // output redirect
+                printf("Output saved to the file./%s\n", redirect[1]);
+                int fd = open(redirect[1], O_TRUNC | O_CREAT | O_RDWR);
+                dup2(fd, STDOUT_FILENO); // redirect stdout to file descriptor 
+            }
+            else if(!strncmp(redirect[0], "i", 1))
+            {   // s redirect
+                printf("Reading from file: ./%s\n", redirect[1]);
+                int fd = open(redirect[1], O_RDONLY);
+                memset(s, 0, BUFSIZ * sizeof(char));
+                read(fd, s,  BUFSIZ * sizeof(char));
+                memset(cargs, 0, BUFSIZ * sizeof(char));
+                s[strlen(s) - 1]  = '\0';
+                tokparse(s , cargs);
+            }
+            else if(!strncmp(redirect[0], "p", 1))
+            {   // found a pipe
+                pid_t pidchild;                 //child
+                int rhsoffset = piperhs(cargs);
+                cargs[rhsoffset] = "\0";
+                int i = pipe(pipefd);
+                if(i < 0)
+                {
+                    fprintf(stderr, "pipe creation failed...\n");
+                    return 1;
+                }
+
+                char* lhs[BUFSIZ], *rhs[BUFSIZ];
+                memset(lhs, 0, BUFSIZ*sizeof(char));                //buffers to zero
+                memset(rhs, 0, BUFSIZ*sizeof(char));
+
+                for(int i = 0; i < rhsoffset; i++)
+                {
+                    lhs[i] = cargs[i];
+                }
+                for(int i = 0; i < BUFSIZ; i++){
+                    int ix = ix + rhsoffset + 1;
+                    if(cargs[i] == 0) 
+                    {
+                        break;
+                    }
+                    rhs[i] = cargs[ix];
+                }
+                
+                pidchild = fork();                      // create child to handle pipe's rhs
+                if(pidchild < 0)
+                {
+                    fprintf(stderr, "fork failed...\n");
+                    return 1;
+                }
+                if(pidchild != 0)
+                {   // parent process 
+                    dup2(pipefd[WRITE_END], STDOUT_FILENO);         // duplicate stdout to write end of file descriptor
+                    close(pipefd[WRITE_END]);                       // close write
+                    execvp(lhs[0], lhs);
+                    exit(0); 
+                }
+                else
+                {   // child process
+                    dup2(pipefd[READ_END], STDIN_FILENO);           // duplicate read end of pipe to stdin
+                    close(pipefd[READ_END]);                        // close read 
+                    execvp(rhs[0], rhs);                           
+                    exit(0);
+                }
+                wait(NULL);
+            }
+            execvp(cargs[0], cargs);                                //The things args array will be passed to
+            exit(0);  
+        }
+    }
+
+    return 0;
+}
+//end of parse function
+
+//Locate pipe char and return inside
+int piperhs(char** cargs){
+    int i = 0;
+    while(cargs[i] != '\0'){
+        if(!strncmp(cargs[i], "|", 1)) 
+        {   // found pipe
+            return i;                               // new cargs starting at offset
+        }
+        ++i;
+    }
+    return -1;
+}
+
+//=============================================================================================================================================================================================================
+
+osh> ls
+DateClient.java  fig3-30.c  fig3-32.c  fig3-33.c  fig3-35.c       multi-fork    newproc-posix.c  output_file      pid.c  shell.c            shm-posix-consumer.c  simple-shell    unix_pipe.c         win32-pipe-parent.c
+DateServer.java  fig3-31.c  fig3-33    fig3-34.c  input_file.txt  multi-fork.c  newproc-win32.c  output_file.txt  shell  SHELL_OUTPUTS.txt  shm-posix-producer.c  simple-shell.c  win32-pipe-child.c
+osh> 
+
+
+//=============================================================================================================================================================================================================
+osh> exit
+osc@ubuntu:~/final-src-osc10e/ch3$ 
+//===============================================================================================================================================================================================================
+
+osh> ls -l
+total 152
+-rw-rw-r-- 1 osc osc   710 Jan  3  2018 DateClient.java
+-rw-rw-r-- 1 osc osc   810 Jun 18  2018 DateServer.java
+-rw-rw-r-- 1 osc osc   361 Jun 18  2018 fig3-30.c
+-rw-rw-r-- 1 osc osc   121 Jan  3  2018 fig3-31.c
+-rw-rw-r-- 1 osc osc   136 Jan  3  2018 fig3-32.c
+-rwxrwxr-x 1 osc osc 10288 Mar 15 16:11 fig3-33
+-rw-rw-r-- 1 osc osc   509 Mar 15 16:11 fig3-33.c
+-rw-rw-r-- 1 osc osc   680 Jun 18  2018 fig3-34.c
+-rw-rw-r-- 1 osc osc   534 Jun 18  2018 fig3-35.c
+-rw-rw-r-- 1 osc osc     2 Mar 15 17:47 input_file.txt
+-rwxrwxr-x 1 osc osc  8712 Jan 30  2018 multi-fork
+-rw-rw-r-- 1 osc osc   257 Jan 30  2018 multi-fork.c
+-rw-rw-r-- 1 osc osc   780 Jan 28  2018 newproc-posix.c
+-rw-rw-r-- 1 osc osc  1413 Jan  3  2018 newproc-win32.c
+-rw---S--T 1 osc osc     0 Mar 15 16:45 output_file
+-rw---S--T 1 osc osc   340 Mar 15 17:51 output_file.txt
+-rw-r--r-- 1 osc osc  2976 Jun 18  2018 pid.c
+-rwxrwxr-x 1 osc osc 17312 Mar 15 18:41 shell
+-rw-rw-r-- 1 osc osc  6525 Mar 15 18:42 shell.c
+-rw-rw-r-- 1 osc osc  6549 Mar 15 18:46 SHELL_OUTPUTS.txt
+-rw-rw-r-- 1 osc osc  1115 Jun 18  2018 shm-posix-consumer.c
+-rw-rw-r-- 1 osc osc  1434 Jun 18  2018 shm-posix-producer.c
+-rwxrwxr-x 1 osc osc 10112 Mar 15 16:15 simple-shell
+-rw-rw-r-- 1 osc osc   707 Jun 18  2018 simple-shell.c
+-rw-rw-r-- 1 osc osc  1219 Jan  3  2018 unix_pipe.c
+-rw-rw-r-- 1 osc osc   755 Jan  3  2018 win32-pipe-child.c
+-rw-rw-r-- 1 osc osc  2236 Jan  3  2018 win32-pipe-parent.c
+
+===================================================================================================================================================================================================================
+
+osh> !!
+total 156
+-rw-rw-r-- 1 osc osc   710 Jan  3  2018 DateClient.java
+-rw-rw-r-- 1 osc osc   810 Jun 18  2018 DateServer.java
+-rw-rw-r-- 1 osc osc   361 Jun 18  2018 fig3-30.c
+-rw-rw-r-- 1 osc osc   121 Jan  3  2018 fig3-31.c
+-rw-rw-r-- 1 osc osc   136 Jan  3  2018 fig3-32.c
+-rwxrwxr-x 1 osc osc 10288 Mar 15 16:11 fig3-33
+-rw-rw-r-- 1 osc osc   509 Mar 15 16:11 fig3-33.c
+-rw-rw-r-- 1 osc osc   680 Jun 18  2018 fig3-34.c
+-rw-rw-r-- 1 osc osc   534 Jun 18  2018 fig3-35.c
+-rw-rw-r-- 1 osc osc     2 Mar 15 17:47 input_file.txt
+-rwxrwxr-x 1 osc osc  8712 Jan 30  2018 multi-fork
+-rw-rw-r-- 1 osc osc   257 Jan 30  2018 multi-fork.c
+-rw-rw-r-- 1 osc osc   780 Jan 28  2018 newproc-posix.c
+-rw-rw-r-- 1 osc osc  1413 Jan  3  2018 newproc-win32.c
+-rw---S--T 1 osc osc     0 Mar 15 16:45 output_file
+-rw---S--T 1 osc osc   340 Mar 15 17:51 output_file.txt
+-rw-r--r-- 1 osc osc  2976 Jun 18  2018 pid.c
+-rwxrwxr-x 1 osc osc 17312 Mar 15 18:41 shell
+-rw-rw-r-- 1 osc osc  6525 Mar 15 18:42 shell.c
+-rw-rw-r-- 1 osc osc  9114 Mar 15 18:48 SHELL_OUTPUTS.txt
+-rw-rw-r-- 1 osc osc  1115 Jun 18  2018 shm-posix-consumer.c
+-rw-rw-r-- 1 osc osc  1434 Jun 18  2018 shm-posix-producer.c
+-rwxrwxr-x 1 osc osc 10112 Mar 15 16:15 simple-shell
+-rw-rw-r-- 1 osc osc   707 Jun 18  2018 simple-shell.c
+-rw-rw-r-- 1 osc osc  1219 Jan  3  2018 unix_pipe.c
+-rw-rw-r-- 1 osc osc   755 Jan  3  2018 win32-pipe-child.c
+-rw-rw-r-- 1 osc osc  2236 Jan  3  2018 win32-pipe-parent.c
+osh> 
+
+=============================================================================================================================================================================================================================
+
+osh> ls > output_file
+Output saved to the file./output_file
+osh> 
+DateClient.java
+DateServer.java
+fig3-30.c
+fig3-31.c
+fig3-32.c
+fig3-33
+fig3-33.c
+fig3-34.c
+fig3-35.c
+input_file.txt
+multi-fork
+multi-fork.c
+newproc-posix.c
+newproc-win32.c
+output_file
+output_file.txt
+pid.c
+shell
+shell.c
+SHELL_OUTPUTS.txt
+shm-posix-consumer.c
+shm-posix-producer.c
+simple-shell
+simple-shell.c
+unix_pipe.c
+win32-pipe-child.c
+win32-pipe-parent.c
+
+=========================================================================================================================================================================================
+
+osh> printf 2\n5\n9\n4\n2\n1 > out.txt
+Output saved to the file./out.txt
+2
+5
+9
+4
+2
+1
+=====================================================================================================================================================================================
+
+osh> < input_file.txt > output_file.txt
+Output saved to the file./output_file.txt
+
+================================================================================================================================================================================
+
+osh> ls < input_file.txt 
+Reading from file: ./input_file.txt
+total 160
+-rw-rw-r-- 1 osc osc   710 Jan  3  2018 DateClient.java
+-rw-rw-r-- 1 osc osc   810 Jun 18  2018 DateServer.java
+-rw-rw-r-- 1 osc osc   361 Jun 18  2018 fig3-30.c
+-rw-rw-r-- 1 osc osc   121 Jan  3  2018 fig3-31.c
+-rw-rw-r-- 1 osc osc   136 Jan  3  2018 fig3-32.c
+-rwxrwxr-x 1 osc osc 10288 Mar 15 16:11 fig3-33
+-rw-rw-r-- 1 osc osc   509 Mar 15 16:11 fig3-33.c
+-rw-rw-r-- 1 osc osc   680 Jun 18  2018 fig3-34.c
+-rw-rw-r-- 1 osc osc   534 Jun 18  2018 fig3-35.c
+-rw-rw-r-- 1 osc osc     6 Mar 15 19:10 input_file.txt
+-rwxrwxr-x 1 osc osc  8712 Jan 30  2018 multi-fork
+-rw-rw-r-- 1 osc osc   257 Jan 30  2018 multi-fork.c
+-rw-rw-r-- 1 osc osc   780 Jan 28  2018 newproc-posix.c
+-rw-rw-r-- 1 osc osc  1413 Jan  3  2018 newproc-win32.c
+-rw---S--T 1 osc osc     0 Mar 15 18:52 output_file
+-rw---S--T 1 osc osc     0 Mar 15 19:07 output_file.txt
+-rw---S--T 1 osc osc    11 Mar 15 19:02 out.txt
+-rw-r--r-- 1 osc osc  2976 Jun 18  2018 pid.c
+-rwxrwxr-x 1 osc osc 17312 Mar 15 18:41 shell
+-rw-rw-r-- 1 osc osc  6510 Mar 15 19:05 shell.c
+-rw-rw-r-- 1 osc osc 12814 Mar 15 19:10 SHELL_OUTPUTS.txt
+-rw-rw-r-- 1 osc osc  1115 Jun 18  2018 shm-posix-consumer.c
+-rw-rw-r-- 1 osc osc  1434 Jun 18  2018 shm-posix-producer.c
+-rwxrwxr-x 1 osc osc 10112 Mar 15 16:15 simple-shell
+-rw-rw-r-- 1 osc osc   707 Jun 18  2018 simple-shell.c
+-rw-rw-r-- 1 osc osc  1219 Jan  3  2018 unix_pipe.c
+-rw-rw-r-- 1 osc osc   755 Jan  3  2018 win32-pipe-child.c
+-rw-rw-r-- 1 osc osc  2236 Jan  3  2018 win32-pipe-parent.c
+osh> 
+
+======================================================================================================================================================================================
+
+osc> ls -l | less
+total 156
+-rw-rw-r-- 1 osc osc   710 Jan  3  2018 DateClient.java
+-rw-rw-r-- 1 osc osc   810 Jun 18  2018 DateServer.java
+-rw-rw-r-- 1 osc osc   361 Jun 18  2018 fig3-30.c
+-rw-rw-r-- 1 osc osc   121 Jan  3  2018 fig3-31.c
+-rw-rw-r-- 1 osc osc   136 Jan  3  2018 fig3-32.c
+-rwxrwxr-x 1 osc osc 10288 Mar 15 16:11 fig3-33
+-rw-rw-r-- 1 osc osc   509 Mar 15 16:11 fig3-33.c
+-rw-rw-r-- 1 osc osc   680 Jun 18  2018 fig3-34.c
+-rw-rw-r-- 1 osc osc   534 Jun 18  2018 fig3-35.c
+-rw-rw-r-- 1 osc osc    14 Mar 15 19:06 input_file.txt
+-rwxrwxr-x 1 osc osc  8712 Jan 30  2018 multi-fork
+-rw-rw-r-- 1 osc osc   257 Jan 30  2018 multi-fork.c
+:osh> 

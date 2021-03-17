@@ -15,20 +15,31 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 
-#define READ_END 0 
-#define WRITE_END 1
+//=================================================================================================
+//Locate pipe char and return inside
+int piperhs(char** chararguments){
+    int i = 0;
+    while(chararguments[i] != '\0'){
+        if(!strncmp(chararguments[i], "|", 1)) 
+        {   // found pipe
+            return i;                               // new chararguments starting at offset
+        }
+        i++;
+    }
+    return -1;
+}// end of locate pipe
+//=================================================================================================
 
-int piperhs(char** cargs);
-
+//=================================================================================================
 //start of parse function
-char** tokparse(char* s, char* cargs[])
+char** parse(char* s, char* chararguments[])
 {
     const char breakchars[2] = {' ','\t'};
     char* p;
     int num_args = 0;
 
     p = strtok(s, breakchars);
-    cargs[0] = p;
+    chararguments[0] = p;
 
     char** REDIR = malloc(2 * sizeof(char*));
 
@@ -42,7 +53,7 @@ char** tokparse(char* s, char* cargs[])
 
     while(p != NULL)
     {
-        // add p to cargs
+        // add p to chararguments
         p = strtok(NULL, breakchars);
 
         if(p == NULL) 
@@ -67,20 +78,24 @@ char** tokparse(char* s, char* cargs[])
         {   // pipe
             REDIR[0] = "p";        
         }
-        cargs[++num_args] = p;
+        chararguments[num_args++] = p;
     }
     return REDIR;
 }   // end of parse function
+//==================================================================================================
+
+//==================================================================================================
+//main function
 
 int main(int argc, const char* argv[])
 {
     char s [BUFSIZ];
-    char MRU   [BUFSIZ]; // most-recently used cache
+    char last_command[BUFSIZ]; // most-recently used cache
     int pipefd[2];      // file descriptor
 
     // clear buffers
     memset(s, 0, BUFSIZ * sizeof(char));
-    memset(MRU,   0, BUFSIZ * sizeof(char));
+    memset(last_command, 0, BUFSIZ * sizeof(char));
    
 
     while(1)
@@ -99,16 +114,16 @@ int main(int argc, const char* argv[])
         }
         if(strncmp(s, "!!", 2))                 // history
         {
-            strcpy(MRU, s);
+            strcpy(last_command, s);
         } 
 
         // wait for '&'
-        bool waitx = true;
+        bool a = true;
         char* offset = strstr(s, "&");
         if(offset != NULL)
         {
             *offset = ' '; 
-            waitx = false;
+            a = false;
         }
 
         pid_t pid = fork();
@@ -119,25 +134,25 @@ int main(int argc, const char* argv[])
         }
         else if(pid != 0)
         {   // parent
-            if(waitx){
+            if(a){
                 wait(NULL);         // wait if used with '&'
                 wait(NULL);
             }
         }
         else
         {   // child
-            char* cargs[BUFSIZ];
-            memset(cargs, 0, BUFSIZ * sizeof(char));
+            char* chararguments[BUFSIZ];
+            memset(chararguments, 0, BUFSIZ * sizeof(char));
 
             int history = 0;
-            // if we use '!!' we want to read from MRU
+            // if we use '!!' we want to read from last_command
             if(!strncmp(s, "!!", 2))
             {
                 history = 1;
             }
-            char** redirect = tokparse( (history ? MRU : s), cargs);
+            char** redirect = parse( (history ? last_command : s), chararguments);
             // no command entered before history function
-            if(history && MRU[0] == '\0')
+            if(history && last_command[0] == '\0')
             {
                 printf("No recently used command.\n");
                 exit(0);
@@ -154,15 +169,15 @@ int main(int argc, const char* argv[])
                 int fd = open(redirect[1], O_RDONLY);
                 memset(s, 0, BUFSIZ * sizeof(char));
                 read(fd, s,  BUFSIZ * sizeof(char));
-                memset(cargs, 0, BUFSIZ * sizeof(char));
+                memset(chararguments, 0, BUFSIZ * sizeof(char));
                 s[strlen(s) - 1]  = '\0';
-                tokparse(s , cargs);
+                parse(s , chararguments);
             }
             else if(!strncmp(redirect[0], "p", 1))
             {   // found a pipe
                 pid_t pidchild;                 //child
-                int rhsoffset = piperhs(cargs);
-                cargs[rhsoffset] = "\0";
+                int rhsoffset = piperhs(chararguments);
+                chararguments[rhsoffset] = "\0";
                 int i = pipe(pipefd);
                 if(i < 0)
                 {
@@ -170,21 +185,21 @@ int main(int argc, const char* argv[])
                     return 1;
                 }
 
-                char* lhs[BUFSIZ], *rhs[BUFSIZ];
+                char *lhs[BUFSIZ], *rhs[BUFSIZ];
                 memset(lhs, 0, BUFSIZ*sizeof(char));                //buffers to zero
                 memset(rhs, 0, BUFSIZ*sizeof(char));
 
                 for(int i = 0; i < rhsoffset; i++)
                 {
-                    lhs[i] = cargs[i];
+                    lhs[i] = chararguments[i];
                 }
                 for(int i = 0; i < BUFSIZ; i++){
                     int ix = ix + rhsoffset + 1;
-                    if(cargs[i] == 0) 
+                    if(chararguments[i] == 0) 
                     {
                         break;
                     }
-                    rhs[i] = cargs[ix];
+                    rhs[i] = chararguments[ix];
                 }
                 
                 pidchild = fork();                      // create child to handle pipe's rhs
@@ -193,40 +208,28 @@ int main(int argc, const char* argv[])
                     fprintf(stderr, "fork failed\n");
                     return 1;
                 }
-                if(pidchild != 0)
+                else if(pidchild != 0)
                 {   // parent process 
-                    dup2(pipefd[WRITE_END], STDOUT_FILENO);         // duplicate stdout to write end of file descriptor
-                    close(pipefd[WRITE_END]);                       // close write
+                    dup2(pipefd[1], STDOUT_FILENO);         // duplicate stdout to write end of file descriptor
+                    close(pipefd[1]);                       // close write
                     execvp(lhs[0], lhs);
                     exit(0); 
                 }
                 else
                 {   // child process
-                    dup2(pipefd[READ_END], STDIN_FILENO);           // duplicate read end of pipe to stdin
-                    close(pipefd[READ_END]);                        // close read 
+                    dup2(pipefd[0], STDIN_FILENO);           // duplicate read end of pipe to stdin
+                    close(pipefd[0]);                        // close read 
                     execvp(rhs[0], rhs);                           
                     exit(0);
                 }
                 wait(NULL);
             }
-            execvp(cargs[0], cargs);                                //The things args array will be passed to
+            execvp(chararguments[0], chararguments);                                //The things args array will be passed to
             exit(0);  
         }
     }
 
     return 0;
 }
+//======================================================================================================================
 //end of main
-
-//Locate pipe char and return inside
-int piperhs(char** cargs){
-    int i = 0;
-    while(cargs[i] != '\0'){
-        if(!strncmp(cargs[i], "|", 1)) 
-        {   // found pipe
-            return i;                               // new cargs starting at offset
-        }
-        ++i;
-    }
-    return -1;
-}// end of locate pipe

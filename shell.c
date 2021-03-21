@@ -15,14 +15,16 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 
+
 //===============================================================================================================
 //Locate pipe char and return inside
 //function for the right pipe
 int piperhs(char** char_args)
 {
     int i = 0;
-    while(char_args[i] != '\0'){
-        if(!strncmp(char_args[i], "|", 1)) 
+    while(char_args[i] != '\0')
+    {
+        if(!strncmp(char_args[i], "|", 1))      //checks to see if | was inputted
         {   
             return i;                               // new char_args starting at offset
         }
@@ -41,15 +43,15 @@ char** parse(char* s, char* char_args[])
     p = strtok(s, breakchars);
     char_args[0] = p;
 
-    char** REDIR = malloc(2 * sizeof(char*));
+    char** redirectto = malloc(2 * sizeof(char*));
 
     for(int i = 0; i < 2; i++)
     {
-        REDIR[i] = malloc(BUFSIZ * sizeof(char));
+        redirectto[i] = malloc(BUFSIZ * sizeof(char));
     }
 
-    REDIR[0] = "";
-    REDIR[1] = "";
+    redirectto[0] = "";
+    redirectto[1] = "";
 
     while(p != NULL)
     {
@@ -63,170 +65,120 @@ char** parse(char* s, char* char_args[])
         if(!strncmp(p, ">", 1))
         {
             p = strtok(NULL, breakchars);
-            REDIR[0] = "o";
-            REDIR[1] = p;
-            return REDIR;
+            redirectto[0] = "o";
+            redirectto[1] = p;
+            return redirectto;
         } 
-        else if(!strncmp(p, "<", 1))
+        if(!strncmp(p, "<", 1))
         {
             p = strtok(NULL, breakchars);
-            REDIR[0] = "i";
-            REDIR[1] = p;
-            return REDIR;
+            redirectto[0] = "i";
+            redirectto[1] = p;
+            return redirectto;
         }
-        else if(!strncmp(p, "|", 1))
-        {   // pipe
-            REDIR[0] = "p";        
-        }
-        char_args[++num_args] = p;
+        char_args[num_args+1] = p;
     }
-    return REDIR;
+    return redirectto;
 }   // end of parse function
-
+//=========================================================================================
 int main(int argc, const char* argv[])
 {
-    char s [BUFSIZ];
-    char last_command   [BUFSIZ]; // most-recently used cache
-    int pipefd[2];      // file descriptor
+    char input [BUFSIZ];            //given
+    char last_command [BUFSIZ]; 
+    int pipefd[2];              // pipe file
 
     // clear buffers
-    memset(s, 0, BUFSIZ * sizeof(char));
-    memset(last_command,   0, BUFSIZ * sizeof(char));
+    memset(input, 0, BUFSIZ * sizeof(char));
+    memset(last_command,   0, BUFSIZ * sizeof(char));   //given
+    bool finished = false; //=0 also given
 
-
-    while(1)
+    while(!finished)
     {
         printf("osh> ");            //given
         fflush(stdout); 
 
-        // read into s
-        fgets(s, BUFSIZ, stdin);
-        s[strlen(s) - 1] = '\0';                // replace newline with null
+        bool waitone = true;
+        // read into input
+        if (fgets(input, BUFSIZ, stdin)==NULL)
+        {
+            fprintf(stderr,"no command entered\n");
+            exit(1);
+        }
 
-        if(strncmp(s, "exit", 4) == 0)          //get out of osh
+        input[strlen(input) - 1] = '\0';                // replace newline with null
+        printf("input was: \n'%s'\n", input);
+
+        if(strncmp(input, "!!", 2))                 // history
+        {
+            strcpy(last_command, input);
+        } 
+        if(strncmp(input, "exit", 4) == 0)          //get out of osh
         {
             return 0;
         }
-        if(strncmp(s, "!!", 2))                 // history
-        {
-            strcpy(last_command, s);
-        } 
-
-        // wait for '&'
-        bool waitx = true;
-        char* offset = strstr(s, "&");
+        char* offset = strstr(input, "&");
         if(offset != NULL)
         {
             *offset = ' '; 
-            waitx = false;
-        }
-
+            waitone = false;
+        } 
+        //fork function to create child begins here
         pid_t pid = fork();
-        if(pid < 0)
-        {   // failed to create child 
+        int valuechild = 0;
+        if(pid < valuechild)
+        {
             fprintf(stderr, "fork failed...\n");
-            return -1; // exit
+            exit(1); // exit
         }
-        else if(pid != 0)
-        {   // parent
-            if(waitx){
+        else if(pid != valuechild)      //parent
+        {   
+            if(waitone)
+            {
                 wait(NULL);         // wait if used with '&'
                 wait(NULL);
             }
-        }
-        else
-        {   // child
+        }  
+        else    //child
+        {
+            int history = 0;
             char* char_args[BUFSIZ];
             memset(char_args, 0, BUFSIZ * sizeof(char));
 
-            int history = 0;
-            // if we use '!!' we want to read from last_command
-            if(!strncmp(s, "!!", 2))
+            // if we use '!!' we want to read from last_command for child now
+            if(!strncmp(input, "!!", 2))
             {
                 history = 1;
             }
-            char** redirect = parse( (history ? last_command : s), char_args);
-            // no command entered before history function
+            char** redirect = parse( (history ? last_command : input), char_args); // redirects to the instructions in parse
+            // no command entered before history 
             if(history && last_command[0] == '\0')
             {
-                printf("No recently used command.\n");
-                exit(0);
+                printf("No command used.\n");
+                exit(1);
             } 
-            if(!strncmp(redirect[0], "o", 1))
-            {   // output redirect for the output
+            if(!strncmp(redirect[0], "o", 1))       // output redirect for the output
+            {
                 printf("Output saved to the file./%s\n", redirect[1]);
-                int fd = open(redirect[1], O_TRUNC | O_CREAT | O_RDWR);
-                dup2(fd, STDOUT_FILENO); // redirect stdout to file descriptor 
+                int file = open(redirect[1], O_TRUNC | O_CREAT | O_RDWR);
+                dup2(file, STDOUT_FILENO);        // redirect stdout to file 
             }
-            else if(!strncmp(redirect[0], "i", 1))
-            {   // s redirect for the read
+            if(!strncmp(redirect[0], "i", 1))      //redirect for the read
+            { 
                 printf("Reading from file: ./%s\n", redirect[1]);
-                int fd = open(redirect[1], O_RDONLY);   
-                memset(s, 0, BUFSIZ * sizeof(char));
-                read(fd, s,  BUFSIZ * sizeof(char));
-                memset(char_args, 0, BUFSIZ * sizeof(char));
-                s[strlen(s) - 1]  = '\0';
-                parse(s , char_args);
+                int file = open(redirect[1], O_RDONLY);   
+                memset(input, 0, BUFSIZ * sizeof(char));
+                memset(char_args, 0, BUFSIZ * sizeof(char));    //buffer reset
+                read(file, input,  BUFSIZ * sizeof(char));
+                input[strlen(input) - 1]  = '\0';
+                parse(input, char_args);
             }
-            else if(!strncmp(redirect[0], "p", 1))
-            {   // found a pipe
-                pid_t pidchild;                 //child
-                int rhsoffset = piperhs(char_args);
-                char_args[rhsoffset] = "\0";
-                int i = pipe(pipefd);
-
-                if(i < 0)
-                {
-                    fprintf(stderr, "Pipe failed\n");
-                    return 1;
-                }
-
-                char* lhs[BUFSIZ], *rhs[BUFSIZ];        //left buffer and right buffer
-                memset(lhs, 0, BUFSIZ*sizeof(char));                //buffers to zero
-                memset(rhs, 0, BUFSIZ*sizeof(char));
-
-                for(int i = 0; i < rhsoffset; i++)
-                {
-                    lhs[i] = char_args[i];
-                }
-                for(int i = 0; i < BUFSIZ; i++)
-                {
-                    int ix = ix + rhsoffset + 1;
-                    if(char_args[i] == 0) 
-                    {
-                        break;
-                    }
-                    rhs[i] = char_args[ix];
-                }
-
-                pidchild = fork();                      // create child to handle pipe's rhs
-                if(pidchild < 0)
-                {
-                    fprintf(stderr, "fork failed\n");
-                    return 1;
-                }
-                if(pidchild != 0)
-                {   // parent process 
-                    dup2(pipefd[1], STDOUT_FILENO);         // duplicate stdout to write end of file descriptor
-                    close(pipefd[1]);                       // close write
-                    execvp(lhs[0], lhs);                    //execvp is used in child process
-                    exit(0); 
-                }
-                else
-                {   // child process
-                    dup2(pipefd[0], STDIN_FILENO);           // duplicate read end of pipe to stdin
-                    close(pipefd[0]);                        // close read 
-                    execvp(rhs[0], rhs);                           
-                    exit(0);
-                }
-                wait(NULL);
-            }
-            execvp(char_args[0], char_args);                                //The things args array will be passed to
-            exit(0);  
-        }
+                execvp(char_args[0], char_args);                                //The things args array will be passed to
+                exit(0);
+        }  
     }
-
-    return 0;
-}
+    printf("osh exited\n");
+    printf("program finished\n");
+    return 0;    
+} 
 //end of main
 //===================================================================================================================

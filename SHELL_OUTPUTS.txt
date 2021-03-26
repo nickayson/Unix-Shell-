@@ -1,10 +1,7 @@
-input was: 
-'cat shell.c &'
-osh> // Nicholas Ayson
-// Due on March 25, 2021
+osh>cat unixshell.c
+// Nicholas Ayson
+// Due on March 28, 2021
 // Unix Shell project
-
-//===============================================================================================================================================================================
 
 #include <stdio.h>
 #include <string.h>
@@ -16,379 +13,252 @@ osh> // Nicholas Ayson
 #include <sys/wait.h>
 #include <fcntl.h>
 
+#define MAX_LINE        100 //100 chars per line, per command 
+#define READ_END        0
+#define WRITE_END       1
 
-//===============================================================================================================
-//Locate pipe char and return inside
-//function for the right pipe
-int piperhs(char** char_args)
+//Function that calls for user input
+void Input(char *args[], bool *Ampsign, int *numOfElem)
 {
-    int i = 0;
-    while(char_args[i] != '\0')
+        char input[MAX_LINE];
+    int lengthinput = read(STDIN_FILENO, input, 80);
+    char delimiter[] = " ";
+
+        // given
+        if (lengthinput > 0 && input[lengthinput - 1] == '\n')
     {
-        if(!strncmp(char_args[i], "|", 1))      //checks to see if | was inputted
-        {   
-            return i;                               // new char_args starting at offset
-        }
-        i++;
+        input[lengthinput - 1] = '\0';
     }
-    return -1;
-}// end of locate pipe 
-//===============================================================================================================================
-//start of parse function
-char** parse(char* s, char* char_args[])
-{
-    const char breakchars[2] = {' ','\t'};
-    char* p;
-    int num_args = 0;
-
-    p = strtok(s, breakchars);
-    char_args[0] = p;
-
-    char** redirectto = malloc(2 * sizeof(char*));
-
-    for(int i = 0; i < 2; i++)
-    {
-        redirectto[i] = malloc(BUFSIZ * sizeof(char));
+    if (strcmp(input, "!!") == 0)
+        {
+        if (*numOfElem == 0)
+                {
+            printf("No commands in history.\n");
+        }
+                return;
     }
-
-    redirectto[0] = "";
-    redirectto[1] = "";
-
-    while(p != NULL)
-    {
-        // add p to char_args
-        p = strtok(NULL, breakchars);
-
-        if(p == NULL) 
+        if (strcmp(input, "exit") == 0)
         {
-            break;
-        }
-        if(!strncmp(p, ">", 1))
-        {
-            p = strtok(NULL, breakchars);
-            redirectto[0] = "o";
-            redirectto[1] = p;
-            return redirectto;
-        } 
-        if(!strncmp(p, "<", 1))
-        {
-            p = strtok(NULL, breakchars);
-            redirectto[0] = "i";
-            redirectto[1] = p;
-            return redirectto;
-        }
-        if(!strncmp(p, "|", 1))
-        {   
-            redirectto[0] = "p";        
-        }
-        char_args[num_args+1] = p;
-    }
-    return redirectto;
-}   // end of parse function
-//=========================================================================================
-int main(int argc, const char* argv[])
-{
-    char input [BUFSIZ];            //given
-    char last_command [BUFSIZ]; 
-    int pipefd[2];              // pipe file
-
-    // clear buffers
-    memset(input, 0, BUFSIZ * sizeof(char));
-    memset(last_command,   0, BUFSIZ * sizeof(char));   //given
-    bool finished = false; //=0 also given
-
-    while(!finished)
-    {
-        printf("osh> ");            //given
-        fflush(stdout); 
-
-        bool waitone = true;
-        // read into input
-        if (fgets(input, BUFSIZ, stdin)==NULL)
-        {
-            fprintf(stderr,"no command entered\n");
-            exit(1);
-        }
-
-        input[strlen(input) - 1] = '\0';                // replace newline with null
-        printf("input was: \n'%s'\n", input);
-
-        if(strncmp(input, "!!", 2))                 // history
-        {
-            strcpy(last_command, input);
-        } 
-        if(strncmp(input, "exit", 4) == 0)          //get out of osh
-        {
-            return 0;
-        }
-        char* offset = strstr(input, "&");
-        if(offset != NULL)
-        {
-            *offset = ' '; 
-            waitone = false;
-        } 
-        //fork function to create child begins here
-        pid_t pid = fork();
-        int valuechild = 0;
-        if(pid < valuechild)
-        {
-            fprintf(stderr, "fork failed...\n");
-            exit(1); // exit
-        }
-        else if(pid != valuechild)      //parent
-        {   
-            if(waitone)
-            {
-                wait(NULL);         // wait if used with '&'
-                wait(NULL);
-            }
-        }  
-        else    //child
-        {
-            int history = 0;
-            char* char_args[BUFSIZ];
-            memset(char_args, 0, BUFSIZ * sizeof(char));
-
-            // if we use '!!' we want to read from last_command for child now
-            if(!strncmp(input, "!!", 2))
-            {
-                history = 1;
-            }
-            char** redirect = parse( (history ? last_command : input), char_args); // redirects to the instructions in parse
-            // no command entered before history 
-            if(history && last_command[0] == '\0')
-            {
-                printf("No command used.\n");
-                exit(1);
-            } 
-            if(!strncmp(redirect[0], "o", 1))       // output redirect for the output
-            {
-                printf("Output saved to the file./%s\n", redirect[1]);
-                int file = open(redirect[1], O_TRUNC | O_CREAT | O_RDWR);
-                dup2(file, STDOUT_FILENO);        // redirect stdout to file 
-            }
-            if(!strncmp(redirect[0], "i", 1))      //redirect for the read
-            { 
-                printf("Reading from file: ./%s\n", redirect[1]);
-                int file = open(redirect[1], O_RDONLY);   
-                memset(input, 0, BUFSIZ * sizeof(char));
-                memset(char_args, 0, BUFSIZ * sizeof(char));    //buffer reset
-                read(file, input,  BUFSIZ * sizeof(char));
-                input[strlen(input) - 1]  = '\0';
-                parse(input, char_args);
-            }
-                execvp(char_args[0], char_args);                                //The things args array will be passed to
                 exit(0);
-        }  
-    }
-    printf("osh exited\n");
-    printf("program finished\n");
-    return 0;    
-} 
-//end of main
-//===================================================================================================================
-input was: 
-''
-osh> exit
-input was: 
-'exit'
-osc@ubuntu:~/final-src-osc10e/ch3$ ./shell
-osh> cat shell.c &
-input was: 
-'cat shell.c &'
-osh> // Nicholas Ayson
-// Due on March 25, 2021
-// Unix Shell project
+        }
 
-//===============================================================================================================================================================================
+        for(int i = 0; i < *numOfElem; i++)
+        {
+                args[i] = NULL;
+        }
 
+    *numOfElem = 0;
+    *Ampsign = false;
 
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <fcntl.h>
+        char *ptr = strtok(input, delimiter);
 
+        //Breaks the input to use
+        while(ptr != NULL)
+        {
+                //If an ampersand
+                if (ptr[0] == '&')
+                {
+            *Ampsign = true;                            //Flag if program detects an ampersand
+            ptr = strtok(NULL, delimiter);
+        }
 
-//===============================================================================================================
-//Locate pipe char and return inside
-//function for the right pipe
-int piperhs(char** char_args)
+                args[*numOfElem] = strdup(ptr);
+                *numOfElem += 1;                                                //Increase number of elements
+                ptr = strtok(NULL, delimiter);                  //set ptr to NULL
+        }
+
+        args[*numOfElem] = NULL;
+}
+
+// Main Program
+int main(void)
 {
-    int i = 0;
-    while(char_args[i] != '\0')
-    {
-        if(!strncmp(char_args[i], "|", 1))      //checks to see if | was inputted
+        char *args[MAX_LINE/2 + 1];
+        bool Ampsign = false;           //0 if no amp
+        int numOfElem = 0;                      // Number of Elements
+
+        bool Pipe = false;              //Flag to indicate we are using a pipe
+    bool finished = false;  
+        pid_t pid;
+
+    while (!finished)
         {   
-            return i;                               // new char_args starting at offset
-        }
-        i++;
+                Pipe = false;
+        printf("osh>");//given
+        fflush(stdout);
+
+                 Input(args, &Ampsign, &numOfElem);
+                 pid = fork();
+
+                //If pid < 0 then an error has occured
+                if(pid < 0)
+                {
+                        fprintf(stderr, "Fork Failed"); 
+                        return 1;
+                }
+
+                //If pid == 0 then child created successfully 
+                else if(pid == 0)
+                {
+                        //If the array is not empty
+                        if(numOfElem != 0)
+                        {
+                                int file;                                               //File name
+                                bool redirectInput = false;             //indicate intput file
+                                bool redirectOutput = false;    //indicate output outfile
+
+                                // check for input '<', output '>', or a '|'
+                                for (int i = 0; i < numOfElem; i++)
+                                {
+                                        //if '<' input
+                                        if(strcmp(args[i], "<") == 0)
+                                        {
+                                                file = open(args[i + 1], O_RDONLY);
+
+                                                if (args[i + 1]  == NULL || file == -1)
+                                                {
+                                printf("Invalid Command!\n");
+                                return 1;
+                        }
+
+                                                dup2(file, STDIN_FILENO);       //Any writes in standard output will be sent to file
+                                                redirectInput = true;
+                                                args[i] = NULL;
+                                args[i + 1] = NULL;
+
+                                                break;
+                                        }
+                                        //else if '>' output
+                                        else if(strcmp(args[i], ">") == 0)
+                                        {
+                                                file = open(args[i + 1], O_WRONLY | O_CREAT);   //Will create and write to file
+                                                if (args[i + 1] == NULL || file == -1)
+                                                {
+                                printf("Invalid Command!\n");
+                                return 1;
+                        }
+
+                                                dup2(file, STDOUT_FILENO);      //Any writes in standard output will be sent to file
+                                                redirectOutput = true;
+                                                args[i] = NULL;                         //Sets "<" to NULL
+                                args[i + 1] = NULL;
+
+                                                break;
+                                        }
+                                        //pipe
+                                        else if(strcmp(args[i], "|") == 0)
+                                        {
+                                                Pipe = true;
+                        int fd[2];
+                                if (pipe(fd) == -1)
+                                                {
+                                                        fprintf(stderr,"Pipe failed");
+                                                        return 1;
+                                                }
+
+                                                //Create two arrays for the first and second set of commands
+                        char *arr1[i + 1];
+                        char *arr2[numOfElem - i + 1];
+
+                                                //Fill first array
+                        for (int j = 0; j < i; j++)
+                                                {
+                                arr1[j] = args[j];
+                        }
+                        arr1[i] = NULL;
+
+                                                //Fill second array
+                        for (int j = 0; j < numOfElem - i - 1; j++)
+                                                {
+                         arr2[j] = args[j + i + 1];
+                        }
+                        arr2[numOfElem - i - 1] = NULL;
+
+                                                //Now fork a child process
+                        pid_t pidPipe = fork();
+
+                                                //Error handling
+                                                if (pidPipe < 0)
+                                                {
+                                                        fprintf(stderr, "Fork failed.");
+                                                        return 1;
+                                                }
+                        else if (pidPipe > 0)
+                                                {
+                                                        //Wait for child process to complete
+                                wait(NULL);
+
+                                                        //Close unused pipe
+                                close(fd[WRITE_END]);
+                                dup2(fd[READ_END], STDIN_FILENO);
+                                close(fd[READ_END]);
+
+                                                        //Error
+                                if (execvp(arr2[0], arr2) == -1)
+                                                        {
+                                printf("Invalid Command!\n");
+                                return 1;
+                                }
+                        }
+                                                else
+                                                {
+                                                        //Close unused pipe
+                                close(fd[READ_END]);
+                                dup2(fd[WRITE_END], STDOUT_FILENO);
+                                close(fd[WRITE_END]);
+
+                                                        //Error
+                                if (execvp(arr1[0], arr1) == -1)
+                                                        {
+                                        printf("Invalid Command!\n");
+                                return 1;
+                                }
+                        }
+                        close(fd[READ_END]);
+                        close(fd[WRITE_END]);
+
+                        break;
+                                        }
+                                }
+
+                                //If no redirects
+                if (Pipe == false)
+                                {
+                                        //Error
+                    if (execvp(args[0], args) == -1)
+                                        {
+                        printf("Invalid Command!\n");
+                        return 1;
+                    }
+                }
+
+                                //Close input and output
+                if (redirectInput == false) 
+                                {
+                    close(STDIN_FILENO);
+
+                }
+                                else if (redirectOutput == false)
+                                {
+                    close(STDOUT_FILENO);
+                }
+                close(file);
+                        }
+                }
+                //Parent  
+                else
+                {
+                        //If there is no ampersand '&', then parent will wait
+                        if(Ampsign == false)
+                        {
+                                wait(NULL);
+                        }
+                }
     }
-    return -1;
-}// end of locate pipe 
-//===============================================================================================================================
-//start of parse function
-char** parse(char* s, char* char_args[])
-{
-    const char breakchars[2] = {' ','\t'};
-    char* p;
-    int num_args = 0;
-
-    p = strtok(s, breakchars);
-    char_args[0] = p;
-
-    char** redirectto = malloc(2 * sizeof(char*));
-
-    for(int i = 0; i < 2; i++)
-    {
-        redirectto[i] = malloc(BUFSIZ * sizeof(char));
-    }
-
-    redirectto[0] = "";
-    redirectto[1] = "";
-
-    while(p != NULL)
-    {
-        // add p to char_args
-        p = strtok(NULL, breakchars);
-
-        if(p == NULL) 
-        {
-            break;
-        }
-        if(!strncmp(p, ">", 1))
-        {
-            p = strtok(NULL, breakchars);
-            redirectto[0] = "o";
-            redirectto[1] = p;
-            return redirectto;
-        } 
-        if(!strncmp(p, "<", 1))
-        {
-            p = strtok(NULL, breakchars);
-            redirectto[0] = "i";
-            redirectto[1] = p;
-            return redirectto;
-        }
-        if(!strncmp(p, "|", 1))
-        {   
-            redirectto[0] = "p";        
-        }
-        char_args[num_args+1] = p;
-    }
-    return redirectto;
-}   // end of parse function
-//=========================================================================================
-int main(int argc, const char* argv[])
-{
-    char input [BUFSIZ];            //given
-    char last_command [BUFSIZ]; 
-    int pipefd[2];              // pipe file
-
-    // clear buffers
-    memset(input, 0, BUFSIZ * sizeof(char));
-    memset(last_command,   0, BUFSIZ * sizeof(char));   //given
-    bool finished = false; //=0 also given
-
-    while(!finished)
-    {
-        printf("osh> ");            //given
-        fflush(stdout); 
-
-        bool waitone = true;
-        // read into input
-        if (fgets(input, BUFSIZ, stdin)==NULL)
-        {
-            fprintf(stderr,"no command entered\n");
-            exit(1);
-        }
-
-        input[strlen(input) - 1] = '\0';                // replace newline with null
-        printf("input was: \n'%s'\n", input);
-
-        if(strncmp(input, "!!", 2))                 // history
-        {
-            strcpy(last_command, input);
-        } 
-        if(strncmp(input, "exit", 4) == 0)          //get out of osh
-        {
-            return 0;
-        }
-        char* offset = strstr(input, "&");
-        if(offset != NULL)
-        {
-            *offset = ' '; 
-            waitone = false;
-        } 
-        //fork function to create child begins here
-        pid_t pid = fork();
-        int valuechild = 0;
-        if(pid < valuechild)
-        {
-            fprintf(stderr, "fork failed...\n");
-            exit(1); // exit
-        }
-        else if(pid != valuechild)      //parent
-        {   
-            if(waitone)
-            {
-                wait(NULL);         // wait if used with '&'
-                wait(NULL);
-            }
-        }  
-        else    //child
-        {
-            int history = 0;
-            char* char_args[BUFSIZ];
-            memset(char_args, 0, BUFSIZ * sizeof(char));
-
-            // if we use '!!' we want to read from last_command for child now
-            if(!strncmp(input, "!!", 2))
-            {
-                history = 1;
-            }
-            char** redirect = parse( (history ? last_command : input), char_args); // redirects to the instructions in parse
-            // no command entered before history 
-            if(history && last_command[0] == '\0')
-            {
-                printf("No command used.\n");
-                exit(1);
-            } 
-            if(!strncmp(redirect[0], "o", 1))       // output redirect for the output
-            {
-                printf("Output saved to the file./%s\n", redirect[1]);
-                int file = open(redirect[1], O_TRUNC | O_CREAT | O_RDWR);
-                dup2(file, STDOUT_FILENO);        // redirect stdout to file 
-            }
-            if(!strncmp(redirect[0], "i", 1))      //redirect for the read
-            { 
-                printf("Reading from file: ./%s\n", redirect[1]);
-                int file = open(redirect[1], O_RDONLY);   
-                memset(input, 0, BUFSIZ * sizeof(char));
-                memset(char_args, 0, BUFSIZ * sizeof(char));    //buffer reset
-                read(file, input,  BUFSIZ * sizeof(char));
-                input[strlen(input) - 1]  = '\0';
-                parse(input, char_args);
-            }
-                execvp(char_args[0], char_args);                                //The things args array will be passed to
-                exit(0);
-        }  
-    }
-    printf("osh exited\n");
-    printf("program finished\n");
-    return 0;    
-} 
-//end of main
-//===================================================================================================================
-input was: 
-''
-osh> 
-
-//=============================================================================================================================================================================================================
+        return 0;
+}
+//main finished
+osh>
 
 osh> ls
 DateClient.java  fig3-30.c  fig3-32.c  fig3-33.c  fig3-35.c       multi-fork    newproc-posix.c  output_file      pid.c  shell.c            shm-posix-consumer.c  simple-shell    unix_pipe.c         win32-pipe-parent.c
@@ -466,8 +336,8 @@ osh>
 
 =============================================================================================================================================================================================================================
 
-osh> ls > output_file
-Output saved to the file./output_file
+osh> ls > output_file.txt
+Output saved to the file
 osh> 
 DateClient.java
 DateServer.java
@@ -505,7 +375,7 @@ osh> < input_file.txt > output_file.txt
 Output saved to the file./output_file.txt
 
 ================================================================================================================================================================================
-
+ls -l in input_file.txt
 osh> ls < input_file.txt 
 Reading from file: ./input_file.txt
 total 160
@@ -540,4 +410,17 @@ total 160
 osh> 
 
 ======================================================================================================================================================================================
-cannot get ls -l | less not recognized
+osh> ls -l | less
+total 236
+-rw---S--T 1 osc osc   390 Mar 20 23:50 >
+-rw-r--r-- 1 osc osc  1640 Mar 20 23:58 a
+-rw-r--r-- 1 osc osc  1732 Mar 25 23:31 d
+-rw-rw-r-- 1 osc osc   710 Jan  3  2018 DateClient.java
+-rw-rw-r-- 1 osc osc   810 Jun 18  2018 DateServer.java
+-rw-rw-r-- 1 osc osc   361 Jun 18  2018 fig3-30.c
+-rw-rw-r-- 1 osc osc   121 Jan  3  2018 fig3-31.c
+-rw-rw-r-- 1 osc osc   136 Jan  3  2018 fig3-32.c
+-rwxrwxr-x 1 osc osc 10288 Mar 15 16:11 fig3-33
+-rw-rw-r-- 1 osc osc   509 Mar 15 16:11 fig3-33.c
+-rw-rw-r-- 1 osc osc   680 Jun 18  2018 fig3-34.c
+:
